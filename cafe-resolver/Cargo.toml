@@ -1,0 +1,10 @@
+[package]
+name = "cafe-resolver"
+version = "0.1.0"
+authors = ["mkam"]
+edition = "2018"
+
+[dependencies]
+structopt = "0.3.21"
+cafe-common = { path = "../cafe-common" }
+cafe-dns = { path = "../cafe-dns" }
