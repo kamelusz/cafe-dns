@@ -1,11 +1,15 @@
-use cafe_common::{BinaryWriter, BitVector64};
-use cafe_common::stream::Output as OutputStream;
+use cafe_common::{BinaryReader, BinaryWriter, BitVector64};
+use cafe_common::stream::{SeekOrigin, Output as OutputStream, Input as InputStream};
 
 fn to_u64(value: bool) -> u64 {
     match value {
         true => return 1,
         false => return 0
     };
+}
+
+fn to_bool(value: u64) -> bool {
+    value != 0
 }
 
 fn encode_qname(qname: &str) -> Vec<u8> {
@@ -16,6 +20,42 @@ fn encode_qname(qname: &str) -> Vec<u8> {
     }
 
     result
+}
+
+fn decode_qname(bytes: &[u8]) -> Option<String> {
+    if bytes.len() == 0 {
+        return None
+    }
+
+    let mut current = bytes;
+    let mut result = String::new();
+
+    loop {
+        let len = current[0] as usize;
+        if len > current.len() {
+            return None;
+        }
+
+        current = &current[1 ..];
+        if !current[.. len].is_ascii() {
+            return None;
+        }
+
+        for ch in current[.. len].iter().map(|byte| *byte as char) {
+            result.push(ch);
+        }
+
+        current = &current[len ..];
+        if current.is_empty() {
+            return Some(result);
+        }
+
+        if current[0] as usize == 0 {
+            return Some(result);
+        }
+
+        result.push('.')
+    }
 }
 
 #[derive(Debug)]
@@ -202,6 +242,48 @@ impl Header {
         encoder.write_u16(self.nscount().to_be());
         encoder.write_u16(self.arcount().to_be());
     }
+
+    pub fn decode(stream: &mut InputStream) -> Option<Header> {
+        let mut reader = BinaryReader::new(stream);
+        let id = reader.read_u16()?;
+
+        let flags = reader.read_u8()?;
+        let bits = BitVector64::from(flags as u64);
+        let rd = bits.get_part(0, 1) as u64;
+        let tc = bits.get_part(1, 1) as u64;
+        let aa = bits.get_part(2, 1) as u64;
+        let opcode = bits.get_part(3, 4) as u8;
+        let qr = bits.get_part(7, 1) as u64;
+
+        let flags = reader.read_u8()?;
+        let bits = BitVector64::from(flags as u64);
+        let rcode = bits.get_part(0, 4) as u8;
+        let z  = bits.get_part(4, 3) as u8;
+        let ra = bits.get_part(7, 1) as u64;
+
+        let qdcount = reader.read_u16()?;
+        let ancount = reader.read_u16()?;
+        let nscount = reader.read_u16()?;
+        let arcount = reader.read_u16()?;
+
+        Some(
+            Header {
+                id: u16::from_be(id),
+                qdcount: u16::from_be(qdcount),
+                ancount: u16::from_be(ancount),
+                nscount: u16::from_be(nscount),
+                arcount: u16::from_be(arcount),
+                qr: to_bool(qr),
+                aa: to_bool(aa),
+                tc: to_bool(tc),
+                rd: to_bool(rd),
+                ra: to_bool(ra),
+                opcode,
+                rcode,
+                z
+            }
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -257,6 +339,213 @@ impl Question {
         writer.write_u8(0);
         writer.write_u16(self.qtype.to_be());
         writer.write_u16(self.qclass.to_be());
+    }
+
+    pub fn decode(stream: &mut InputStream) -> Option<Question> {
+        let qname = decode_qname(stream.data()?)?;
+        if let Err(_) = stream.seek(SeekOrigin::Current, (qname.as_bytes().len() + 2) as i64) {
+            return None
+        }
+
+        let mut reader = BinaryReader::new(stream);
+        let qtype = reader.read_u16()?;
+        let qclass = reader.read_u16()?;
+
+        Some(
+            Question {
+                qname,
+                qtype: u16::from_be(qtype),
+                qclass: u16::from_be(qclass)
+            }
+        )
+    }
+}
+
+#[derive(Debug)]
+/// The answer, authority, and additional sections all share the same
+/// format: a variable number of resource records, where the number of
+/// records is specified in the corresponding count field in the header.
+///                               1  1  1  1  1  1
+/// 0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+/// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+/// |                                               |
+/// /                                               /
+/// /                      NAME                     /
+/// |                                               |
+/// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+/// |                      TYPE                     |
+/// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+/// |                     CLASS                     |
+/// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+/// |                      TTL                      |
+/// |                                               |
+/// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+/// |                   RDLENGTH                    |
+/// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--|
+/// /                     RDATA                     /
+/// /                                               /
+/// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+pub struct ResourceRecord {
+    /// a domain name to which this resource record pertains.
+    name: String,
+    /// two octets containing one of the RR type codes.  This
+    /// field specifies the meaning of the data in the RDATA
+    /// field.
+    ttype: u16,
+    /// two octets which specify the class of the data in the
+    /// RDATA field.
+    class: u16,
+    /// a 32 bit unsigned integer that specifies the time
+    /// interval (in seconds) that the resource record may be
+    /// cached before it should be discarded.  Zero values are
+    /// interpreted to mean that the RR can only be used for the
+    /// transaction in progress, and should not be cached.
+    ttl: u32,
+    /// an unsigned 16 bit integer that specifies the length in
+    /// octets of the RDATA field.
+    rdlength: u16,
+    /// a variable length string of octets that describes the
+    /// resource.  The format of this information varies
+    /// according to the TYPE and CLASS of the resource record.
+    /// For example, the if the TYPE is A and the CLASS is IN,
+    /// the RDATA field is a 4 octet ARPA Internet address.
+    rdata: Vec<u8>
+}
+
+impl ResourceRecord {
+    pub fn decode(stream: &mut InputStream) -> Option<ResourceRecord> {
+        let first_byte = stream.read_byte()?;
+        let name = match ResourceRecord::is_compressed_name(first_byte) {
+            true => {
+                if let Err(_) = stream.seek(SeekOrigin::Current, -1) {
+                    return None;
+                }
+                ResourceRecord::extract_name(stream)?
+            }
+            _ => panic!("not implemented yet")
+        };
+
+        let mut reader = BinaryReader::new(stream);
+        let ttype = reader.read_u16()?;
+        let class = reader.read_u16()?;
+        let ttl = reader.read_u32()?;
+        let rdlength_be = u16::from_be(reader.read_u16()?);
+
+        let mut rdata: Vec<u8> = Vec::with_capacity(rdlength_be as usize);
+        rdata.resize(rdlength_be as usize, 0);
+        stream.read(&mut rdata, 0, rdlength_be as usize);
+
+        Some(
+            ResourceRecord {
+                name,
+                ttype: u16::from_be(ttype),
+                class: u16::from_be(class),
+                ttl: u32::from_be(ttl),
+                rdlength: rdlength_be,
+                rdata
+            }
+        )
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn ttl(&self) -> u32 {
+        self.ttl
+    }
+
+    pub fn ttype(&self) -> u16 {
+        self.ttype
+    }
+
+    pub fn class(&self) -> u16 {
+        self.class
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.rdata
+    }
+
+    fn is_compressed_name(byte: u8) -> bool {
+        match byte == 0xC0 {
+            true => true,
+            _ => false
+        }
+    }
+
+    fn extract_name(stream: &mut InputStream) -> Option<String> {
+        let current = stream.position();
+
+        let mut reader = BinaryReader::new(stream);
+        let mut bits = BitVector64::from(reader.read_u16()? as u64);
+        bits.set_part(6, 2, 0);
+        let offset = u16::from_be(bits.get_part(0, 14) as u16);
+        if let Err(_) = stream.seek(SeekOrigin::Begin, offset as i64) {
+            return None;
+        }
+
+        let qname = decode_qname(stream.data()?)?;
+
+        if let Err(_) = stream.seek(SeekOrigin::Begin, (current + 2) as i64) {
+            return None;
+        }
+
+        Some(qname)
+    }
+}
+
+pub struct Response {
+    header: Header,
+    questions: Vec<Question>,
+    answers: Vec<ResourceRecord>
+}
+
+impl Response {
+    pub fn decode(data: &[u8]) -> Option<Response> {
+        let mut stream = InputStream::new(data);
+        let header = Header::decode(&mut stream)?;
+
+        let mut questions = Vec::new();
+        for _ in 0 .. header.qdcount() {
+            questions.push(Question::decode(&mut stream)?);
+        }
+
+        if questions.len() != header.qdcount() as usize {
+            return None;
+        }
+
+        let mut answers = Vec::new();
+        for _ in 0 .. header.ancount() {
+            answers.push(ResourceRecord::decode(&mut stream)?);
+        }
+        
+        if answers.len() != header.ancount() as usize {
+            return None;
+        }
+
+        Some(
+            Response {
+                header,
+                questions,
+                answers
+        })
+    }
+
+    pub fn id(&self) -> u16 {
+        self.header.id()
+    }
+
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
+
+    pub fn questions(&self) -> &[Question] {
+        &self.questions
+    }
+
+    pub fn answers(&self) -> &[ResourceRecord] {
+        &self.answers
     }
 }
 
@@ -318,5 +607,25 @@ mod tests {
         assert_eq!(
             encode_qname("mail.ru"), 
             [4, 109, 97, 105, 108, 2, 114, 117]);
+    }
+
+    #[test]
+    fn decode_addreass() {
+        assert_eq!( 
+            decode_qname(&[3, 119, 119, 119, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109]).unwrap(),
+            "www.example.com");
+
+        assert_eq!(
+            decode_qname(&[4, 109, 97, 105, 108, 2, 114, 117]).unwrap(),
+            "mail.ru");
+
+        // zero end
+        assert_eq!(
+            decode_qname(&[4, 109, 97, 105, 108, 2, 114, 117, 0]).unwrap(),
+            "mail.ru");
+
+        assert_eq!(
+            decode_qname(&[4, 109, 97, 105, 108, 2, 114, 117, 0, 23, 32, 99]).unwrap(),
+            "mail.ru");
     }
 }
