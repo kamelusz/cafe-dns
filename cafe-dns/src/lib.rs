@@ -1,3 +1,23 @@
+use cafe_common::{BinaryWriter, BitVector64};
+use cafe_common::stream::Output as OutputStream;
+
+fn to_u64(value: bool) -> u64 {
+    match value {
+        true => return 1,
+        false => return 0
+    };
+}
+
+fn encode_qname(qname: &str) -> Vec<u8> {
+    let mut result: Vec<u8> = Vec::with_capacity(qname.len());
+    for part in qname.split('.') {
+        result.push(part.len() as u8);
+        result.extend_from_slice(part.as_bytes());
+    }
+
+    result
+}
+
 #[derive(Debug)]
 /// The header contains the following fields (RFC 1035):
 ///                                 1  1  1  1  1  1
@@ -88,6 +108,102 @@ pub struct Header {
     arcount: u16
 }
 
+impl Header {
+    pub fn new(id: u16) -> Self {
+        Self {
+            id,
+            qr: false,
+            opcode: 0,
+            aa: false,
+            tc: false,
+            rd: false,
+            ra: false,
+            z: 0,
+            rcode: 0,
+            qdcount: 0,
+            ancount: 0,
+            nscount: 0,
+            arcount: 0
+        }
+    }
+
+    pub fn id(&self) -> u16 {
+        self.id
+    }
+
+    pub fn qr(&self) -> bool {
+        self.qr
+    }
+
+    pub fn opcode(&self) -> u8 {
+        self.opcode
+    }
+
+    pub fn aa(&self) -> bool {
+        self.aa
+    }
+
+    pub fn tc(&self) -> bool {
+        self.tc
+    }
+    
+    pub fn rd(&self) -> bool {
+        self.rd
+    }
+
+    pub fn set_rd(&mut self, value: bool) {
+        self.rd = value
+    }
+
+    pub fn ra(&self) -> bool {
+        self.ra
+    }
+
+    pub fn z(&self) -> u8 {
+        self.z
+    }
+
+    pub fn rcode(&self) -> u8 {
+        self.rcode
+    }
+
+    pub fn qdcount(&self) -> u16 {
+        self.qdcount
+    }
+
+    pub fn ancount(&self) -> u16 {
+        self.ancount
+    }
+
+    pub fn nscount(&self) -> u16 {
+        self.nscount
+    }
+
+    pub fn arcount(&self) -> u16 {
+        self.arcount
+    }
+
+    pub fn encode(&self, stream: &mut OutputStream) {
+        let mut bitfield = BitVector64::new();
+        bitfield.set_part(15, 1, to_u64(self.qr()));
+        bitfield.set_part(11, 4, self.opcode().into());
+        bitfield.set_part(10, 1, to_u64(self.aa()));
+        bitfield.set_part(9, 1, to_u64(self.tc()));
+        bitfield.set_part(8, 1, to_u64(self.rd()));
+        bitfield.set_part(7, 1, to_u64(self.ra()));
+        bitfield.set_part(4, 3, self.z().into());
+        bitfield.set_part(0, 4, self.rcode().into());
+
+        let mut encoder = BinaryWriter::new(stream);
+        encoder.write_u16(self.id().to_be());
+        encoder.write_u16((bitfield.data() as u16).to_be());
+        encoder.write_u16(self.qdcount().to_be());
+        encoder.write_u16(self.ancount().to_be());
+        encoder.write_u16(self.nscount().to_be());
+        encoder.write_u16(self.arcount().to_be());
+    }
+}
+
 #[derive(Debug)]
 /// The question section is used to carry the "question" in most queries,
 /// i.e., the parameters that define what is being asked
@@ -118,4 +234,89 @@ pub struct Question {
     /// a two octet code that specifies the class of the query.
     /// For example, the QCLASS field is IN for the Internet.
     qclass: u16
+}
+
+impl Question {
+    pub fn new(name: &str, qtype: u16, qclass: u16) -> Self {
+        Self {
+            qname: name.to_string(),
+            qtype,
+            qclass,
+        }
+    }
+
+    pub fn host_name(&self) -> &str {
+        &self.qname
+    }
+
+    pub fn encode(&self, stream: &mut OutputStream) {
+        let qname = encode_qname(&self.qname);
+        stream.write(&qname, 0, qname.len());
+
+        let mut writer = BinaryWriter::new(stream);
+        writer.write_u8(0);
+        writer.write_u16(self.qtype.to_be());
+        writer.write_u16(self.qclass.to_be());
+    }
+}
+
+pub struct Request {
+    header: Header,
+    questions: Vec<Question>
+}
+
+impl Request {
+    pub fn new(id: u16) -> Self {
+        Self {
+            header: Header::new(id),
+            questions: Vec::new()
+        }
+    }
+
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
+
+    pub fn header_mut(&mut self) -> &mut Header {
+        &mut self.header
+    }
+
+    pub fn questions(&self) -> &[Question] {
+        &self.questions
+    }
+
+    pub fn add_question(&mut self, qname: &str, qtype: u16, qclass: u16) {
+        self.questions.push(
+            Question {
+                qname: qname.to_string(),
+                qtype,
+                qclass
+            }
+        );
+
+        self.header.qdcount += 1;
+    }
+
+    pub fn encode(&self, stream: &mut OutputStream) {
+        self.header.encode(stream);
+        for q in &self.questions {
+            q.encode(stream);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_address() {
+        assert_eq!(
+            encode_qname("www.example.com"), 
+            [3, 119, 119, 119, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109]);
+        
+        assert_eq!(
+            encode_qname("mail.ru"), 
+            [4, 109, 97, 105, 108, 2, 114, 117]);
+    }
 }
