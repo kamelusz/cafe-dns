@@ -1,11 +1,11 @@
-use crate::memory_stream::{MemoryStream, SeekError, SeekOrigin};
+use crate::stream::{SeekError, SeekOrigin, Input as InputStream};
 
 pub struct BinaryReader<'a: 'b, 'b> {
-    stream: &'b mut MemoryStream<'a>,
+    stream: &'b mut InputStream<'a>,
 }
 
 impl<'a, 'b> BinaryReader<'a, 'b> {
-    pub fn new(stream: &'b mut MemoryStream<'a>) -> Self {
+    pub fn new(stream: &'b mut InputStream<'a>) -> Self {
         Self { 
             stream,
         }

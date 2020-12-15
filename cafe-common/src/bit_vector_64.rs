@@ -50,6 +50,14 @@ impl BitVector64 {
     }
 }
 
+impl From<u64> for BitVector64 {
+    fn from(bits: u64) -> Self {
+        Self {
+            data: bits
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

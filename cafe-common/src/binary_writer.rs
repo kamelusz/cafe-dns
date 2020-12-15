@@ -1,12 +1,12 @@
-use crate::memory_stream::{MemoryStream, SeekError, SeekOrigin};
+use crate::stream::{SeekError, SeekOrigin, Output as OutputStream};
 
 pub struct BinaryWriter<'a: 'b, 'b> {
-    stream: &'b mut MemoryStream<'a>,
+    stream: &'b mut OutputStream<'a>,
     buffer: [u8; 8]
 }
 
 impl<'a, 'b> BinaryWriter<'a, 'b> {
-    pub fn new(stream: &'b mut MemoryStream<'a>) -> Self {
+    pub fn new(stream: &'b mut OutputStream<'a>) -> Self {
         Self { 
             stream,
             buffer: [0; 8]
