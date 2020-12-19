@@ -1,4 +1,4 @@
-use cafe_dns::{Type, Response as DnsResponse};
+use cafe_dns::{Type, ResponseCode as RCode, Response as DnsResponse};
 
 /*
 Domain Name System (response)
@@ -50,7 +50,7 @@ fn decode_response() {
     assert_eq!(response.header().qr(), true);
     assert_eq!(response.header().rd(), true);
     assert_eq!(response.header().ra(), true);
-    assert_eq!(response.header().rcode(), 0);
+    assert_eq!(response.header().rcode(), RCode::NoError);
     assert_eq!(response.header().qdcount(), 1);
     assert_eq!(response.header().ancount(), 2);
     assert_eq!(response.questions().len(), response.header().qdcount() as usize);

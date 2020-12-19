@@ -1,7 +1,9 @@
+pub mod rcode;
 pub mod types;
 pub mod classes;
 
 pub use self::classes::QClass;
+pub use self::rcode::ResponseCode;
 pub use self::types::{QType, Type};
 
 use cafe_common::{BinaryReader, BinaryWriter, BitVector64};
@@ -117,32 +119,7 @@ pub struct Header {
     /// Reserved for future use.  Must be zero in all queries
     /// and responses.
     z: u8,
-    /// Response code - this 4 bit field is set as part of
-    /// responses.  The values have the following
-    /// interpretation:
-    /// 0               No error condition
-    /// 1               Format error - The name server was
-    ///                 unable to interpret the query.
-    /// 2               Server failure - The name server was
-    ///                 unable to process this query due to a
-    ///                 problem with the name server.
-    /// 3               Name Error - Meaningful only for
-    ///                 responses from an authoritative name
-    ///                 server, this code signifies that the
-    ///                 domain name referenced in the query does
-    ///                 not exist.
-    /// 4               Not Implemented - The name server does
-    ///                 not support the requested kind of query.
-    /// 5               Refused - The name server refuses to
-    ///                 perform the specified operation for
-    ///                 policy reasons.  For example, a name
-    ///                 server may not wish to provide the
-    ///                 information to the particular requester,
-    ///                 or a name server may not wish to perform
-    ///                 a particular operation (e.g., zone
-    ///                 transfer) for particular data.
-    /// 6-15            Reserved for future use.
-    rcode: u8,
+    rcode: ResponseCode,
     /// an unsigned 16 bit integer specifying the number of
     /// entries in the question section.
     qdcount: u16,
@@ -168,7 +145,7 @@ impl Header {
             rd: false,
             ra: false,
             z: 0,
-            rcode: 0,
+            rcode: ResponseCode::default(),
             qdcount: 0,
             ancount: 0,
             nscount: 0,
@@ -212,7 +189,7 @@ impl Header {
         self.z
     }
 
-    pub fn rcode(&self) -> u8 {
+    pub fn rcode(&self) -> ResponseCode {
         self.rcode
     }
 
@@ -241,7 +218,7 @@ impl Header {
         bitfield.set_part(8, 1, to_u64(self.rd()));
         bitfield.set_part(7, 1, to_u64(self.ra()));
         bitfield.set_part(4, 3, self.z().into());
-        bitfield.set_part(0, 4, self.rcode().into());
+        bitfield.set_part(0, 4, self.rcode as u64);
 
         let mut encoder = BinaryWriter::new(stream);
         encoder.write_u16(self.id().to_be());
@@ -266,7 +243,18 @@ impl Header {
 
         let flags = reader.read_u8()?;
         let bits = BitVector64::from(flags as u64);
+
         let rcode = bits.get_part(0, 4) as u8;
+        let rcode = match rcode.try_into() {
+            Ok(ResponseCode::NoError) => ResponseCode::NoError,
+            Ok(ResponseCode::FormatError) => ResponseCode::FormatError,
+            Ok(ResponseCode::ServerFailure) => ResponseCode::ServerFailure,
+            Ok(ResponseCode::NameError) => ResponseCode::NameError,
+            Ok(ResponseCode::NotImplemented) => ResponseCode::NotImplemented,
+            Ok(ResponseCode::Refused) => ResponseCode::Refused,
+            Err(_) => return None
+        };
+        
         let z  = bits.get_part(4, 3) as u8;
         let ra = bits.get_part(7, 1) as u64;
 
