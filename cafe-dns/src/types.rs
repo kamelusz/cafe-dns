@@ -1,3 +1,5 @@
+pub use std::net::Ipv4Addr;
+
 use std::convert::TryFrom;
 
 #[repr(u16)]
@@ -22,5 +24,18 @@ impl TryFrom<u16> for QType {
             x if x == QType::SRV as u16 => Ok(QType::SRV),
             _ => Err(()),
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum Type {
+    A {
+        ip: Ipv4Addr
+    }, 
+    SRV {
+        priority: u16,
+        weight: u16,
+        port: u16,
+        target: String
     }
 }

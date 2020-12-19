@@ -1,11 +1,13 @@
 pub mod types;
 pub mod classes;
 
-pub use self::types::QType;
 pub use self::classes::QClass;
+pub use self::types::{QType, Type};
 
 use cafe_common::{BinaryReader, BinaryWriter, BitVector64};
-use cafe_common::stream::{SeekOrigin, Output as OutputStream, Input as InputStream};
+use cafe_common::stream::{SeekOrigin, SeekError, Output as OutputStream, Input as InputStream};
+
+use std::net::Ipv4Addr;
 use std::convert::TryInto;
 
 fn to_u64(value: bool) -> u64 {
@@ -408,7 +410,7 @@ pub struct ResourceRecord {
     /// two octets containing one of the RR type codes.  This
     /// field specifies the meaning of the data in the RDATA
     /// field.
-    ttype: u16,
+    ttype: Type,
     /// two octets which specify the class of the data in the
     /// RDATA field.
     class: u16,
@@ -418,15 +420,6 @@ pub struct ResourceRecord {
     /// interpreted to mean that the RR can only be used for the
     /// transaction in progress, and should not be cached.
     ttl: u32,
-    /// an unsigned 16 bit integer that specifies the length in
-    /// octets of the RDATA field.
-    rdlength: u16,
-    /// a variable length string of octets that describes the
-    /// resource.  The format of this information varies
-    /// according to the TYPE and CLASS of the resource record.
-    /// For example, the if the TYPE is A and the CLASS is IN,
-    /// the RDATA field is a 4 octet ARPA Internet address.
-    rdata: Vec<u8>
 }
 
 impl ResourceRecord {
@@ -443,23 +436,51 @@ impl ResourceRecord {
         };
 
         let mut reader = BinaryReader::new(stream);
-        let ttype = reader.read_u16()?;
-        let class = reader.read_u16()?;
-        let ttl = reader.read_u32()?;
-        let rdlength_be = u16::from_be(reader.read_u16()?);
+        let ttype = u16::from_be(reader.read_u16()?);
+        let class = u16::from_be(reader.read_u16()?);
+        let ttl = u32::from_be(reader.read_u32()?);
+        let _data_length = u16::from_be(reader.read_u16()?);
 
-        let mut rdata: Vec<u8> = Vec::with_capacity(rdlength_be as usize);
-        rdata.resize(rdlength_be as usize, 0);
-        stream.read(&mut rdata, 0, rdlength_be as usize);
+        let ttype = match ttype {
+            1 => {
+                let octet0 = reader.read_u8()?;
+                let octet1 = reader.read_u8()?;
+                let octet2 = reader.read_u8()?;
+                let octet3 = reader.read_u8()?;
+
+                Type::A {
+                    ip: Ipv4Addr::new(octet0, octet1, octet2, octet3)
+                }
+            },
+            33 => {
+                let priority = u16::from_be(reader.read_u16()?);
+                let weight = u16::from_be(reader.read_u16()?);
+                let port = u16::from_be(reader.read_u16()?);
+
+                let target = decode_qname(stream.data()?)?;
+                match stream.seek(SeekOrigin::Current, (target.as_bytes().len() + 2) as i64) {
+                    Ok(_) => { },
+                    // Might appears in the case of the last RR. Just ignore.
+                    Err(SeekError::AfterEnd) => { },
+                    Err(_) => return None
+                }
+
+                Type::SRV {
+                    priority,
+                    weight,
+                    port,
+                    target
+                }
+            },
+            _ => return None
+        };
 
         Some(
             ResourceRecord {
                 name,
-                ttype: u16::from_be(ttype),
-                class: u16::from_be(class),
-                ttl: u32::from_be(ttl),
-                rdlength: rdlength_be,
-                rdata
+                ttype,
+                class,
+                ttl
             }
         )
     }
@@ -472,16 +493,12 @@ impl ResourceRecord {
         self.ttl
     }
 
-    pub fn ttype(&self) -> u16 {
-        self.ttype
+    pub fn ttype(&self) -> &Type {
+        &self.ttype
     }
 
     pub fn class(&self) -> u16 {
         self.class
-    }
-
-    pub fn data(&self) -> &[u8] {
-        &self.rdata
     }
 
     fn is_compressed_name(byte: u8) -> bool {

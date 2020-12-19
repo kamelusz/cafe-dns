@@ -34,7 +34,7 @@ fn calculate_position(position: usize, length: usize, loc: SeekOrigin, offset: i
             };
 
             if new_position >= length {
-                return Err(SeekError::BeforeBegin)
+                return Err(SeekError::AfterEnd)
             }
 
             new_position

@@ -1,4 +1,4 @@
-use cafe_dns::Response as DnsResponse;
+use cafe_dns::{Type, Response as DnsResponse};
 
 /*
 Domain Name System (response)
@@ -53,29 +53,27 @@ fn decode_response() {
     assert_eq!(response.header().rcode(), 0);
     assert_eq!(response.header().qdcount(), 1);
     assert_eq!(response.header().ancount(), 2);
-
     assert_eq!(response.questions().len(), response.header().qdcount() as usize);
+    assert_eq!(response.answers().len(), response.header().ancount() as usize);
+
     let q = &response.questions()[0];
     assert_eq!(q.host_name(), "www.mail.ru");
-
-    assert_eq!(response.answers().len(), response.header().ancount() as usize);
+    
     let a = &response.answers()[0];
     assert_eq!(a.name(), "www.mail.ru");
-    assert_eq!(a.ttype(), 1);
     assert_eq!(a.class(), 1);
     assert_eq!(a.ttl(), 31);
-    assert_eq!(a.data()[0], 0xd9);
-    assert_eq!(a.data()[1], 0x45);
-    assert_eq!(a.data()[2], 0x8b);
-    assert_eq!(a.data()[3], 0x46);
+    match a.ttype() {
+        Type::A { ip } => assert_eq!(*ip, std::net::Ipv4Addr::new(217, 69, 139, 70)),
+        _ => panic!("Unexpected type!")
+    }
 
     let a = &response.answers()[1];
     assert_eq!(a.name(), "www.mail.ru");
-    assert_eq!(a.ttype(), 1);
     assert_eq!(a.class(), 1);
     assert_eq!(a.ttl(), 31);
-    assert_eq!(a.data()[0], 0x5e);
-    assert_eq!(a.data()[1], 0x64);
-    assert_eq!(a.data()[2], 0xb4);
-    assert_eq!(a.data()[3], 0x46);
+    match a.ttype() {
+        Type::A { ip } => assert_eq!(*ip, std::net::Ipv4Addr::new(94, 100, 180, 70)),
+        _ => panic!("Unexpected type!")
+    }
 }
