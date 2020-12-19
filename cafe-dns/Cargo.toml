@@ -1,0 +1,5 @@
+[package]
+name = "cafe-dns"
+version = "0.1.0"
+authors = ["mkam"]
+edition = "2018"
