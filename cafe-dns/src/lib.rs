@@ -1,5 +1,12 @@
+pub mod types;
+pub mod classes;
+
+pub use self::types::QType;
+pub use self::classes::QClass;
+
 use cafe_common::{BinaryReader, BinaryWriter, BitVector64};
 use cafe_common::stream::{SeekOrigin, Output as OutputStream, Input as InputStream};
+use std::convert::TryInto;
 
 fn to_u64(value: bool) -> u64 {
     match value {
@@ -312,14 +319,14 @@ pub struct Question {
     /// The values for this field include all codes valid for a
     /// TYPE field, together with some more general codes which
     /// can match more than one type of RR.
-    qtype: u16,
+    qtype: QType,
     /// a two octet code that specifies the class of the query.
     /// For example, the QCLASS field is IN for the Internet.
-    qclass: u16
+    qclass: QClass
 }
 
 impl Question {
-    pub fn new(name: &str, qtype: u16, qclass: u16) -> Self {
+    pub fn new(name: &str, qtype: QType, qclass: QClass) -> Self {
         Self {
             qname: name.to_string(),
             qtype,
@@ -337,8 +344,8 @@ impl Question {
 
         let mut writer = BinaryWriter::new(stream);
         writer.write_u8(0);
-        writer.write_u16(self.qtype.to_be());
-        writer.write_u16(self.qclass.to_be());
+        writer.write_u16((self.qtype as u16).to_be());
+        writer.write_u16((self.qclass as u16).to_be());
     }
 
     pub fn decode(stream: &mut InputStream) -> Option<Question> {
@@ -349,13 +356,23 @@ impl Question {
 
         let mut reader = BinaryReader::new(stream);
         let qtype = reader.read_u16()?;
+        let qtype = match u16::from_be(qtype).try_into() {
+            Ok(QType::A) => QType::A,
+            Ok(QType::SRV) => QType::SRV,
+            Err(_) => return None
+        };
+
         let qclass = reader.read_u16()?;
+        let qclass = match u16::from_be(qclass).try_into() {
+            Ok(QClass::IN) => QClass::IN,
+            Err(_) => return None
+        };
 
         Some(
             Question {
                 qname,
-                qtype: u16::from_be(qtype),
-                qclass: u16::from_be(qclass)
+                qtype,
+                qclass
             }
         )
     }
@@ -574,7 +591,7 @@ impl Request {
         &self.questions
     }
 
-    pub fn add_question(&mut self, qname: &str, qtype: u16, qclass: u16) {
+    pub fn add_question(&mut self, qname: &str, qtype: QType, qclass: QClass) {
         self.questions.push(
             Question {
                 qname: qname.to_string(),

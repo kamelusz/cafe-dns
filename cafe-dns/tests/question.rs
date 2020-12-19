@@ -1,5 +1,5 @@
 use cafe_common::stream::Output as OutputStream;
-use cafe_dns::Request as DnsRequest;
+use cafe_dns::{QType, QClass, Request as DnsRequest};
 
 /*
 Domain Name System (query)
@@ -34,7 +34,7 @@ const REQUEST: [u8; 29] = [
 fn encode_request() {
     let mut request = DnsRequest::new(1);
     request.header_mut().set_rd(true);
-    request.add_question("www.mail.ru", 1, 1);
+    request.add_question("www.mail.ru", QType::A, QClass::IN);
 
     let mut result: Vec<u8> = Vec::new();
     let mut stream = OutputStream::new(&mut result);

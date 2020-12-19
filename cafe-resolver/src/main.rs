@@ -3,7 +3,7 @@ use std::process::exit;
 use structopt::StructOpt;
 
 use cafe_common::stream::Output as OutputStream;
-use cafe_dns::{Request as DnsRequest, Response as DnsResponse};
+use cafe_dns::{QType, QClass, Request as DnsRequest, Response as DnsResponse};
 
 #[derive(Debug, StructOpt)]
 #[structopt()]
@@ -26,7 +26,7 @@ fn main() {
 
     let mut request = DnsRequest::new(1);
     request.header_mut().set_rd(true);
-    request.add_question(&args.host, 1, 1);
+    request.add_question(&args.host, QType::A, QClass::IN);
 
     let mut buffer = Vec::with_capacity(512);
     let mut stream = OutputStream::new(&mut buffer);
