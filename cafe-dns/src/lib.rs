@@ -157,7 +157,7 @@ impl Header {
         self.id
     }
 
-    pub fn qr(&self) -> bool {
+    pub fn is_response(&self) -> bool {
         self.qr
     }
 
@@ -211,7 +211,7 @@ impl Header {
 
     pub fn encode(&self, stream: &mut OutputStream) {
         let mut bitfield = BitVector64::new();
-        bitfield.set_part(15, 1, to_u64(self.qr()));
+        bitfield.set_part(15, 1, to_u64(self.is_response()));
         bitfield.set_part(11, 4, self.opcode().into());
         bitfield.set_part(10, 1, to_u64(self.aa()));
         bitfield.set_part(9, 1, to_u64(self.tc()));

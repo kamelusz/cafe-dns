@@ -73,7 +73,7 @@ fn decode_response() {
     let response = DnsResponse::decode(&RESPONSE).unwrap();
     assert_eq!(response.id(), 0x0001);
 
-    assert_eq!(response.header().qr(), true);
+    assert_eq!(response.header().is_response(), true);
     assert_eq!(response.header().rd(), true);
     assert_eq!(response.header().ra(), true);
     assert_eq!(response.header().rcode(), RCode::NoError);
