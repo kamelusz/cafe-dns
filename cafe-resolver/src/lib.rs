@@ -154,8 +154,7 @@ impl Resolver {
         return Ok(result);
     }
 
-    pub fn get_srv_records(&mut self, host: &str) -> RecordsResult {
-        let socket = self.connect_to_server()?;
+    fn get_srv_records_socket(&mut self, socket: &UdpSocket, host: &str) -> RecordsResult {
         let mut records = self.get_records(&socket, QType::SRV, host)?;
         records.sort_unstable_by(|a, b| match (a, b) {
             (
@@ -180,9 +179,18 @@ impl Resolver {
         return Ok(records);
     }
 
+    pub fn get_srv_records(&mut self, host: &str) -> RecordsResult {
+        let socket = self.connect_to_server()?;
+        return self.get_srv_records_socket(&socket, host);
+    }
+
+    fn get_a_records_socket(&mut self, socket: &UdpSocket, host: &str) -> RecordsResult {
+        return self.get_records(&socket, QType::A, host);
+    }
+
     pub fn get_a_records(&mut self, host: &str) -> RecordsResult {
         let socket = self.connect_to_server()?;
-        return self.get_records(&socket, QType::A, host);
+        return self.get_a_records_socket(&socket, host);
     }
 
     fn need_to_update_records(&mut self, host: &str) -> bool {
@@ -205,25 +213,68 @@ impl Resolver {
         };
     }
 
-    pub fn resolve_host(&mut self, host: &str) -> Result<ResolveResult, ResolveError> {
+    fn resolve_a_host_socket(
+        &mut self,
+        socket: &UdpSocket,
+        host: &str,
+    ) -> Result<(), ResolveError> {
         if self.need_to_update_records(host) {
-            let records = self.get_a_records(host)?;
+            let records = self.get_a_records_socket(socket, host)?;
             let entry = self.cache.get_mut(host).unwrap();
             entry.clear();
 
             let now = Instant::now();
-            for r in records {
+            for r in &records {
                 match r {
                     RecordVariant::A { ip, ttl } => {
-                        let time_to_die = now + Duration::new(ttl.into(), 0);
-                        entry.push(ResolveRecord::new(host, ip, None, time_to_die));
+                        let time_to_die = now + Duration::new((*ttl).into(), 0);
+                        entry.push(ResolveRecord::make_a(*ip, time_to_die));
                     }
                     _ => (),
                 }
             }
         }
 
+        Ok(())
+    }
+
+    pub fn resolve_host(&mut self, host: &str) -> Result<ResolveResult, ResolveError> {
+        let socket = self.connect_to_server()?;
+        self.resolve_a_host_socket(&socket, host)?;
+
         let entry = self.cache.get_mut(host).unwrap();
         return Ok(ResolveResult::new(entry));
+    }
+
+    pub fn resolve_srv_host(&mut self, host: &str) -> Result<ResolveResult, ResolveError> {
+        self.need_to_update_records(host);
+        let entry = self.cache.get_mut(host).unwrap();
+        entry.clear();
+
+        let socket = self.connect_to_server()?;
+        let records = self.get_srv_records_socket(&socket, host)?;
+
+        let now = Instant::now();
+        for r in &records {
+            match r {
+                RecordVariant::SRV {
+                    target,
+                    port,
+                    priority,
+                    weight,
+                    ttl,
+                } => {
+                    self.resolve_a_host_socket(&socket, target)?;
+                    let ips = self.cache.get_mut(target).unwrap().clone();
+
+                    let time_to_die = now + Duration::new((*ttl).into(), 0);
+                    let record = ResolveRecord::make_srv(target, port, time_to_die: Instant, ips: &Vec<ARecord>)
+                    entry.push()
+                }
+                _ => return Err(ResolveError::DecodeFailed),
+            }
+        }
+
+        return Err(ResolveError::DecodeFailed);
     }
 }

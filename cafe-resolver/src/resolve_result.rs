@@ -3,31 +3,46 @@ use std::net::IpAddr;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
-pub struct Record {
-    host: String,
+pub struct ARecord {
     ip: IpAddr,
-    port: Option<u16>,
     time_to_die: Instant,
 }
 
+#[derive(Debug, Clone)]
+pub struct SRVRecord {
+    target: String,
+    port: u16,
+    time_to_die: Instant,
+    ips: Vec<ARecord>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Record {
+    A(ARecord),
+    SRV(SRVRecord),
+}
+
 impl Record {
-    pub fn new(host: &str, ip: IpAddr, port: Option<u16>, time_to_die: Instant) -> Self {
-        Self {
-            host: String::from(host),
-            ip,
-            port,
-            time_to_die,
-        }
+    pub fn make_a(ip: IpAddr, time_to_die: Instant) -> Self {
+        Record::A(ARecord { ip, time_to_die })
     }
 
     pub fn is_outdated(&self, time: Instant) -> bool {
-        time >= self.time_to_die
+        let time_to_die = match self {
+            Record::A(r) => r.time_to_die,
+            Record::SRV(r) => r.time_to_die,
+        };
+
+        time_to_die <= time
     }
 }
 
 impl fmt::Display for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.ip)
+        match self {
+            Record::A(r) => write!(f, "{}", r.ip),
+            Record::SRV(r) => write!(f, "{:?}; port: {}", r.ips, r.port),
+        }
     }
 }
 
