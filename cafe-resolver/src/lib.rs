@@ -1,32 +1,47 @@
+pub mod resolve_result;
+
+pub use self::resolve_result::{Record as ResolveRecord, Result as ResolveResult};
+
+use std::collections::BTreeMap;
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::time::{Duration, Instant};
 
 use cafe_common::stream::Output as OutputStream;
 use cafe_dns::{QClass, QType, Request as DnsRequest, Response as DnsResponse, ResponseCode, Type};
 
 #[derive(Debug)]
-pub enum AddressVariant {
-    V4(Ipv4Addr),
-    V6(Ipv6Addr),
+pub enum RecordVariant {
+    A {
+        ip: IpAddr,
+        ttl: u32,
+    },
     SRV {
         target: String,
         port: u16,
         priority: u16,
         weight: u16,
+        ttl: u32,
     },
 }
 
-impl fmt::Display for AddressVariant {
+type RecordsResult = Result<Vec<RecordVariant>, ResolveError>;
+
+impl fmt::Display for RecordVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AddressVariant::V4(ip) => write!(f, "{}", ip),
-            AddressVariant::V6(ip) => write!(f, "{}", ip),
-            AddressVariant::SRV {
+            RecordVariant::A { ip, ttl } => write!(f, "{}; ttl: {}", ip, ttl),
+            RecordVariant::SRV {
                 target,
                 port,
                 priority,
                 weight,
-            } => write!(f, "{}:{}; p:{}; w:{}", target, port, priority, weight),
+                ttl,
+            } => write!(
+                f,
+                "{}:{}; priority: {}; weight: {}; ttl: {}",
+                target, port, priority, weight, ttl
+            ),
         }
     }
 }
@@ -42,15 +57,15 @@ pub enum ResolveError {
 pub struct Resolver {
     id_count: u16,
     buffer: [u8; 65_535],
+    cache: BTreeMap<String, Vec<ResolveRecord>>,
 }
-
-type ResolveResult = Result<Vec<AddressVariant>, ResolveError>;
 
 impl Resolver {
     pub fn new() -> Self {
         return Self {
             id_count: 0,
             buffer: [0; 65_535],
+            cache: Default::default(),
         };
     }
 
@@ -88,7 +103,7 @@ impl Resolver {
         return Ok(());
     }
 
-    fn get_records(&mut self, socket: &UdpSocket, qtype: QType, host: &str) -> ResolveResult {
+    fn get_records(&mut self, socket: &UdpSocket, qtype: QType, host: &str) -> RecordsResult {
         self.id_count = self.id_count.wrapping_add(1);
 
         let mut request = DnsRequest::new(self.id_count);
@@ -115,18 +130,23 @@ impl Resolver {
 
         let mut result = Vec::new();
         for answer in response.answers() {
+            let ttl = answer.ttl();
             match answer.ttype() {
-                Type::A { ip } => result.push(AddressVariant::V4(*ip)),
+                Type::A { ip } => result.push(RecordVariant::A {
+                    ip: IpAddr::V4(*ip),
+                    ttl,
+                }),
                 Type::SRV {
                     priority,
                     weight,
                     port,
                     target,
-                } => result.push(AddressVariant::SRV {
+                } => result.push(RecordVariant::SRV {
                     target: target.to_string(),
                     port: *port,
                     priority: *priority,
                     weight: *weight,
+                    ttl,
                 }),
             }
         }
@@ -134,13 +154,76 @@ impl Resolver {
         return Ok(result);
     }
 
-    pub fn get_srv_records(&mut self, host: &str) -> ResolveResult {
+    pub fn get_srv_records(&mut self, host: &str) -> RecordsResult {
         let socket = self.connect_to_server()?;
-        return self.get_records(&socket, QType::SRV, host);
+        let mut records = self.get_records(&socket, QType::SRV, host)?;
+        records.sort_unstable_by(|a, b| match (a, b) {
+            (
+                RecordVariant::SRV {
+                    target: _,
+                    port: _,
+                    priority: p1,
+                    weight: _,
+                    ttl: _,
+                },
+                RecordVariant::SRV {
+                    target: _,
+                    port: _,
+                    priority: p2,
+                    weight: _,
+                    ttl: _,
+                },
+            ) => return p1.cmp(&p2),
+            _ => return std::cmp::Ordering::Equal,
+        });
+
+        return Ok(records);
     }
 
-    pub fn get_a_records(&mut self, host: &str) -> ResolveResult {
+    pub fn get_a_records(&mut self, host: &str) -> RecordsResult {
         let socket = self.connect_to_server()?;
         return self.get_records(&socket, QType::A, host);
+    }
+
+    fn need_to_update_records(&mut self, host: &str) -> bool {
+        let record = self.cache.get(host);
+        match record {
+            Some(rs) => {
+                let now = Instant::now();
+                for r in rs {
+                    if r.is_outdated(now) {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            None => {
+                self.cache.insert(String::from(host), Vec::new());
+                return true;
+            }
+        };
+    }
+
+    pub fn resolve_host(&mut self, host: &str) -> Result<ResolveResult, ResolveError> {
+        if self.need_to_update_records(host) {
+            let records = self.get_a_records(host)?;
+            let entry = self.cache.get_mut(host).unwrap();
+            entry.clear();
+
+            let now = Instant::now();
+            for r in records {
+                match r {
+                    RecordVariant::A { ip, ttl } => {
+                        let time_to_die = now + Duration::new(ttl.into(), 0);
+                        entry.push(ResolveRecord::new(host, ip, None, time_to_die));
+                    }
+                    _ => (),
+                }
+            }
+        }
+
+        let entry = self.cache.get_mut(host).unwrap();
+        return Ok(ResolveResult::new(entry));
     }
 }
